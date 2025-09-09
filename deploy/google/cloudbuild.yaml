@@ -1,0 +1,68 @@
+steps:
+  - id: 'shallow clone'
+    name: 'gcr.io/cloud-builders/git'
+    entrypoint: 'git'
+    args:
+      - 'fetch'
+      - '--unshallow'
+  # Paso 1: Instalar dependencias
+  - name: 'python:3.9'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+  # Paso 2: Ejecutar tests
+  - name: 'python:3.9'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        python -m pytest tests/ -v --cov=src --cov-report=xml
+
+  # Paso 3: Construir la imagen Docker
+  - id: 'Build docker image'
+    name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_DOCKER_REPOSITORY}/${_COMPONENT_NAME}:$BUILD_ID'
+      - '.'
+
+  # Paso 4: Push de la imagen a Container Registry
+  - id: 'Push docker image'
+    name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_DOCKER_REPOSITORY}/${_COMPONENT_NAME}:$BUILD_ID'
+
+  # Paso 5: Desplegar a Cloud Run Jobs
+  - id: 'Deploy to Cloud Run'
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'deploy'
+      - '${_COMPONENT_NAME}-${_ENV}'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_DOCKER_REPOSITORY}/${_COMPONENT_NAME}:$BUILD_ID'
+      - '--region'
+      - '${_REGION}'
+      - '--service-account'
+      - '${_RUN_SERVICE_ACCOUNT_EMAIL}'
+      - '--set-env-vars=ENV=${_ENV}'
+      - '--set-env-vars=PROJECT_ID=$PROJECT_ID'
+
+
+# Configuraciones adicionales
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Timeout del build
+timeout: '1200s'

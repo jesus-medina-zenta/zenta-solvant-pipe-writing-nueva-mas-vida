@@ -1,0 +1,65 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: znt-template-pipe-python
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          timeoutSeconds: 3600
+          containers:
+          - name: pipeline
+            image: gcr.io/PROJECT_ID/znt-template-pipe-python:latest
+            resources:
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+              requests:
+                cpu: 1000m
+                memory: 2Gi
+            env:
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: ENVIRONMENT
+              value: "production"
+            - name: BATCH_SIZE
+              value: "1000"
+            - name: MAX_RETRIES
+              value: "3"
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: database-secrets
+                  key: host
+            - name: POSTGRES_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: database-secrets
+                  key: port
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: database-secrets
+                  key: database
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: database-secrets
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: database-secrets
+                  key: password
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "PROJECT_ID"
+            - name: BIGQUERY_DATASET
+              value: "your_dataset"
+            - name: BIGQUERY_TABLE
+              value: "your_table"
+            - name: BIGQUERY_LOCATION
+              value: "US"

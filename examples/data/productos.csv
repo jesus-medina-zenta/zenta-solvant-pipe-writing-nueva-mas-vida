@@ -1,0 +1,11 @@
+id,name,value,category,is_active,description
+1,Laptop Dell XPS 13,1299.99,electrónicos,true,Laptop ultraligera con pantalla 4K
+2,Mesa de oficina,250.50,muebles,true,Mesa ergonómica para oficina en casa
+3,Audífonos Sony WH-1000XM4,349.99,electrónicos,true,Audífonos con cancelación de ruido
+4,Silla ergonómica,450.00,muebles,false,Silla con soporte lumbar ajustable
+5,Monitor 4K LG,380.00,electrónicos,true,Monitor 27 pulgadas con tecnología IPS
+6,Teclado mecánico,120.00,electrónicos,true,Teclado gaming con switches azules
+7,Lámpara LED,75.50,iluminación,true,Lámpara de escritorio con múltiples niveles
+8,Cafetera espresso,299.99,hogar,true,Cafetera automática con molinillo integrado
+9,Libro Python Programming,45.00,libros,true,Guía completa para programación en Python
+10,Planta suculenta,15.00,jardinería,false,Planta de bajo mantenimiento para oficina

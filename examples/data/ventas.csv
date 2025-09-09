@@ -1,0 +1,16 @@
+id,name,value,category,is_active
+1,Producto A,150.50,electrónica,true
+2,Producto B,75.25,hogar,true
+3,Producto C,200.00,electrónica,false
+4,Producto D,50.75,ropa,true
+5,Producto E,125.00,hogar,true
+6,Producto F,300.99,electrónica,true
+7,Producto G,45.50,ropa,false
+8,Producto H,85.25,hogar,true
+9,Producto I,175.75,electrónica,true
+10,Producto J,95.00,ropa,true
+11,Producto K,220.30,electrónica,false
+12,Producto L,65.80,hogar,true
+13,Producto M,110.50,ropa,true
+14,Producto N,185.25,electrónica,true
+15,Producto O,75.75,hogar,false

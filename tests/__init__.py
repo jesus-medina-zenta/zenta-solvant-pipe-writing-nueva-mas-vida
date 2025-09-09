@@ -1,0 +1,3 @@
+"""
+Tests de inicialización.
+"""

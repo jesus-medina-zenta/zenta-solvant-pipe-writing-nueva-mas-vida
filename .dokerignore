@@ -1,0 +1,34 @@
+# Ignorar directorios de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python/
+venv/
+.venv/
+env/
+
+# configuracion de entorno
+.git/
+.gitignore
+.svn/
+.hg/
+.DS_Store
+Thumbs.db
+*.egg-info/
+*.egg
+dist/
+build/
+*.log
+*.sqlite3 # Si usas SQLite para la base de datos de desarrollo
+*.db
+.env
+config.local.py
+tmp/
+temp/
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+.vscode/
+.idea/
