@@ -5,7 +5,9 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
-from .config import init_config, get_database_config, get_bigquery_config
+from src.services.sftp_service import SFTPService
+
+from .config import get_sftp_config, init_config, get_database_config, get_bigquery_config
 from .services.postgres_service import PostgresService
 from .services.bigquery_service import BigQueryService
 from .models.data_models import DataRecord
@@ -20,8 +22,7 @@ class Pipeline:
     """
     
     def __init__(self):
-        """Inicializa el pipeline con los servicios necesarios."""
-        self.postgres_service = PostgresService()
+        self.sftp_service = SFTPService(get_sftp_config())
         self.bigquery_service = BigQueryService()
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
