@@ -4,12 +4,24 @@ Lógica principal del pipeline ETL.
 import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
+from pathlib import Path
+import pandas as pd
 
+#models
+from src.models.firestore_records import FirestoreCallRecord, CallOutcome, Document600, Document200
+
+#Services
+from src.services.firestore_service import FirestoreService
 from src.services.sftp_service import SFTPService
+from src.services.firestore_service import FirestoreService
+from src.services.file_service import FileService
 
-from .config import get_sftp_config, init_config, get_database_config, get_bigquery_config
-from .services.postgres_service import PostgresService
-from .services.bigquery_service import BigQueryService
+from .config import (
+    get_sftp_config, 
+    get_firestore_config, 
+    get_file_export_config,
+    init_config
+)
 from .models.data_models import DataRecord
 from .utils.logger import get_logger
 
@@ -22,8 +34,14 @@ class Pipeline:
     """
     
     def __init__(self):
-        self.sftp_service = SFTPService(get_sftp_config())
-        self.bigquery_service = BigQueryService()
+        #Configs
+        self.sftp_config = get_sftp_config()
+        self.firestore_config = get_firestore_config()
+        #Services
+        self.sftp_service = SFTPService(self.sftp_config)
+        self.firestore_service = FirestoreService()
+        self.file_service = FileService("./temp")
+        self.export_config = get_file_export_config()
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
         
@@ -39,30 +57,34 @@ class Pipeline:
         
         try:
             # Paso 1: Extract
-            logger.info("Iniciando extracción de datos")
-            raw_data = await self.extract()
-            logger.info(f"Extraídos {len(raw_data)} registros")
-            
-            if not raw_data:
-                logger.warning("No se encontraron datos para procesar")
+            logger.info("Iniciando extracción de Firestore")
+            firestore_data = await self.extract_from_firestore()
+            print(f"Datos extraídos: {firestore_data}")
+            if not firestore_data:
+                logger.warning("No se encontraron datos en Firestore")
                 return True
             
             # Paso 2: Transform
-            logger.info("Iniciando transformación de datos")
-            transformed_data = await self.transform(raw_data)
+            logger.info("Procesando y clasificando documentos...")
+            doc_600_list, doc_200_list = await self.process_and_classify_documents(firestore_data)
+
+            success = True
+            if doc_600_list:
+                logger.info(f"Generando archivo 600 con {len(doc_600_list)} registros...")
+                #success_600 = await self.generate_file_600(doc_600_list)
+                #success = success and success_600
             
-            logger.info(f"Transformados {len(transformed_data)} registros")
-            
-            # Paso 3: Load
-            logger.info("Iniciando carga de datos")
-            success = await self.load(transformed_data)
+            if doc_200_list:
+                logger.info(f"Generando archivo 200 con {len(doc_200_list)} registros...")
+                success_200 = await self.generate_file_200(doc_200_list)
+                success = success and success_200
             
             if success:
                 logger.info("Pipeline completado exitosamente")
-                return True
             else:
-                logger.error("Error en la carga de datos")
-                return False
+                logger.error("Pipeline completado con errores")
+            
+            return success
                 
         except Exception as e:
             logger.exception(f"Error en el pipeline: {e}")
@@ -72,118 +94,179 @@ class Pipeline:
             duration = (self.end_time - self.start_time).total_seconds()
             logger.info(f"Pipeline finalizado. Duración: {duration:.2f} segundos")
     
-    async def extract(self) -> List[Dict[str, Any]]:
+    async def extract_from_firestore(self) -> List[Dict[str, Any]]:
         """
-        Extrae datos de la fuente.
-        
-        Returns:
-            List[Dict[str, Any]]: Datos extraídos
+        Extrae datos de Firestore.
         """
         try:
-            # Aquí puedes personalizar la consulta según tus necesidades
-            query = """
-            SELECT *
-            FROM registro
-            """
+            self.firestore_service.connect()
             
-            data = await self.postgres_service.extract(query)
+            collection_name = self.firestore_config.collection
+            data = await self.firestore_service.extract(collection=collection_name)
+            
+            logger.info(f"Extraídos {len(data)} documentos de Firestore")
             return data
             
         except Exception as e:
-            logger.error(f"Error en la extracción: {e}")
+            logger.error(f"Error extrayendo datos de Firestore: {e}")
             return []
-    
-    async def transform(self, raw_data: List[Dict[str, Any]]) -> List[DataRecord]:
-        """
-        Transforma los datos extraídos.
-        
-        Args:
-            raw_data: Datos en bruto extraídos
-            
-        Returns:
-            List[DataRecord]: Datos transformados y validados
-        """
-        transformed_data = []
-        errors = 0
-        
-        for row in raw_data:
-            try:
-                # Validar y transformar usando Pydantic
-                record = DataRecord(**row)
-                transformed_data.append(record)
-                
-            except Exception as e:
-                errors += 1
-                logger.warning(f"Error transformando registro: {e}")
-                
-                # Si TODOS los registros son inválidos, no continuar
-                if errors == len(raw_data) and len(raw_data) > 0:
-                    logger.error(f"Todos los registros son inválidos ({errors} errores)")
-                    return []
-        
-        if errors > 0:
-            logger.warning(f"Se encontraron {errors} errores en la transformación")
-        
-        return transformed_data
-    
-    async def load(self, data: List[DataRecord]) -> bool:
-        """
-        Carga los datos transformados al destino.
-        
-        Args:
-            data: Datos transformados para cargar
-            
-        Returns:
-            bool: True si la carga fue exitosa
-        """
-        try:
-            # Procesar en lotes para mejorar rendimiento
-            app_config = init_config()
-            batch_size = app_config.batch_size
-            total_batches = (len(data) + batch_size - 1) // batch_size
-            
-            for i in range(0, len(data), batch_size):
-                batch = data[i:i + batch_size]
-                batch_num = (i // batch_size) + 1
-                
-                logger.info(f"Procesando lote {batch_num}/{total_batches} ({len(batch)} registros)")
-                
-                # Convertir a diccionarios para BigQuery (serializando fechas como ISO strings)
-                batch_dicts = [record.model_dump(mode='json') for record in batch]
-                
-                success = await self.bigquery_service.load(batch_dicts)
-                if not success:
-                    logger.error(f"Error cargando lote {batch_num}")
-                    return False
-            
-            logger.info("Todos los lotes cargados exitosamente")
-            return True
             
         except Exception as e:
-            logger.exception(f"Error en la carga: {e}")
-            return False
+            logger.error(f"Error extrayendo datos de Firestore: {e}")
+            return []
     
-    async def validate_data_quality(self, data: List[DataRecord]) -> bool:
+    async def process_and_classify_documents(self, raw_data: List[Dict[str, Any]]) -> tuple[List[Document600], List[Document200]]:
         """
-        Valida la calidad de los datos transformados.
+        Procesa los datos de Firestore y los clasifica según el resultado de la llamada.
         
         Args:
-            data: Datos a validar
+            raw_data: Datos extraídos de Firestore
             
         Returns:
-            bool: True si los datos pasan las validaciones
+            tuple: (documentos_600, documentos_200)
         """
-        if not data:
-            logger.warning("No hay datos para validar")
+        doc_600_list = []
+        doc_200_list = []
+        errors = 0
+        
+        for doc_data in raw_data:
+            try:
+                # Validar estructura básica con Pydantic
+                call_record = FirestoreCallRecord(**doc_data)
+                
+                # Obtener datos necesarios
+                rut = call_record.get_rut()
+                if not rut:
+                    logger.warning(f"Registro sin RUT válido: {call_record.conversation_id}")
+                    errors += 1
+                    continue
+                
+                final_outcome = call_record.get_final_call_outcome()
+                processed_datetime = call_record.get_processed_datetime()
+                
+                # Clasificar según el resultado de la llamada
+                if final_outcome == CallOutcome.PP:
+                    # Crear documento 600 (Promesa de Pago)
+                    due_date = call_record.get_due_date()
+                    amount_due = call_record.get_amount_due()
+                    
+                    if due_date and amount_due:
+                        doc_600 = Document600(
+                            rut=rut,
+                            agent_id=call_record.get_agent_name(),
+                            processed_at=processed_datetime,
+                            due_date=due_date,
+                            amount_due=amount_due
+                        )
+                        doc_600_list.append(doc_600)
+                    else:
+                        logger.warning(f"Promesa de pago sin datos completos: {call_record.conversation_id}")
+                        errors += 1
+                else:
+                    # Crear documento 200 (Actividad de Gestión)
+                    doc_200 = Document200(
+                        rut=rut,
+                        processed_at=processed_datetime,
+                        codigo_resultado=final_outcome or "NC",
+                        agent_name="ZNT_TRI",
+                        phone_number=call_record.get_phone_number(),
+                        call_duration=call_record.call_duration_secs
+                    )
+                    doc_200_list.append(doc_200)
+                
+            except Exception as e:
+                logger.error(f"Error procesando documento: {e}")
+                errors += 1
+        
+        logger.info(f"Procesamiento completado: {len(doc_600_list)} archivo 600, {len(doc_200_list)} archivo 200, {errors} errores")
+        return doc_600_list, doc_200_list
+    
+    async def generate_file_600(self, documents: List[Document600]) -> bool:
+        """
+        Genera archivo 600 con estructura de posiciones fijas.
+        """
+        try:
+            await self.file_service.connect()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"archivo_600_{timestamp}.txt"
+            
+            # Generar contenido con posiciones fijas
+            content_lines = [doc.build_line() for doc in documents]
+            
+            # Crear archivo temporal
+            temp_path = self.file_service.base_path / filename
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(content_lines))
+            
+            logger.info(f"Archivo 600 generado: {filename} con {len(content_lines)} líneas")
+            
+            # Subir al SFTP
+            remote_path = f"{self.export_config.sftp_txt_path}/{filename}"
+            success = await self._upload_to_sftp(str(temp_path), remote_path)
+            
+            # Limpiar archivo temporal
+            if temp_path.exists():
+                temp_path.unlink()
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error generando archivo 600: {e}")
             return False
-        
-        # Validaciones básicas
-        null_count = sum(1 for record in data if not record.is_valid())
-        null_percentage = (null_count / len(data)) * 100
-        
-        if null_percentage > 5:  # Más del 5% de registros inválidos
-            logger.error(f"Demasiados registros inválidos: {null_percentage:.2f}%")
+
+    async def generate_file_200(self, documents: List[Document200]) -> bool:
+        """
+        Genera archivo 200 con estructura de posiciones fijas.
+        """
+        try:
+            await self.file_service.connect()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"archivo_200_{timestamp}.txt"
+            
+            # Generar contenido con posiciones fijas
+            content_lines = [doc.build_line() for doc in documents]
+            
+            # Crear archivo temporal
+            temp_path = self.file_service.base_path / filename
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(content_lines))
+            
+            logger.info(f"Archivo 200 generado: {filename} con {len(content_lines)} líneas")
+            
+            # Subir al SFTP
+            remote_path = f"{self.export_config.sftp_txt_path}/{filename}"
+            success = await self._upload_to_sftp(str(temp_path), remote_path)
+            
+            # Limpiar archivo temporal
+            if temp_path.exists():
+                temp_path.unlink()
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error generando archivo 200: {e}")
             return False
-        
-        logger.info(f"Validación de calidad pasada. Registros inválidos: {null_percentage:.2f}%")
-        return True
+
+    async def _upload_to_sftp(self, local_path: str, remote_path: str) -> bool:
+        """
+        Sube un archivo al SFTP.
+        """
+        try:
+            if not self.sftp_service.connect():
+                logger.error("No se pudo conectar al servidor SFTP")
+                return False
+            
+            success = self.sftp_service.upload_file(local_path, remote_path)
+            
+            if success:
+                logger.info(f"Archivo subido exitosamente: {remote_path}")
+            else:
+                logger.error(f"Error subiendo archivo: {remote_path}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error en _upload_to_sftp: {e}")
+            return False
+        finally:
+            self.sftp_service.disconnect()

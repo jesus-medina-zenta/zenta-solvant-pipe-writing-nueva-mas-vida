@@ -27,32 +27,7 @@ class FileService(BaseService):
         """
         super().__init__()
         self.base_path = Path(base_path) if base_path else Path.cwd()
-        
-    async def connect(self) -> bool:
-        """
-        Verifica que el directorio base existe y es accesible.
-        
-        Returns:
-            bool: True si el directorio es accesible
-        """
-        try:
-            if not self.base_path.exists():
-                self.base_path.mkdir(parents=True, exist_ok=True)
-                logger.info("Directorio creado: %s", self.base_path)
-            
-            # Verificar permisos de escritura
-            test_file = self.base_path / ".test_write"
-            test_file.write_text("test")
-            test_file.unlink()
-            
-            self.is_connected = True
-            logger.info("Servicio de archivos conectado a: %s", self.base_path)
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error conectando servicio de archivos: {e}")
-            self.is_connected = False
-            return False
+    
     
     async def disconnect(self) -> None:
         """Desconecta el servicio (no hay recursos que cerrar)."""
@@ -105,6 +80,113 @@ class FileService(BaseService):
         except Exception as e:
             logger.error(f"Error extrayendo datos de archivo: {e}")
             raise
+
+    async def connect(self) -> bool:
+        """
+        Verifica que el directorio base existe y es accesible.
+        
+        Returns:
+            bool: True si el directorio es accesible
+        """
+        try:
+            # Crear directorio si no existe
+            self.base_path.mkdir(parents=True, exist_ok=True)
+            
+            # Verificar que es accesible
+            if self.base_path.exists() and self.base_path.is_dir():
+                self.is_connected = True
+                logger.info(f"Directorio de archivos accesible: {self.base_path}")
+                return True
+            else:
+                logger.error(f"Directorio no accesible: {self.base_path}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error verificando directorio de archivos: {e}")
+            self.is_connected = False
+            return False
+
+    async def extract(self, file_path: str, file_type: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Extrae datos de un archivo.
+        
+        Args:
+            file_path: Ruta del archivo
+            file_type: Tipo de archivo (csv, json, etc.)
+            
+        Returns:
+            List[Dict[str, Any]]: Datos extraídos
+        """
+        try:
+            full_path = self.base_path / file_path
+            
+            if not full_path.exists():
+                logger.error(f"Archivo no encontrado: {full_path}")
+                return []
+            
+            # Determinar tipo de archivo si no se especifica
+            if not file_type:
+                file_type = full_path.suffix.lower().lstrip('.')
+            
+            if file_type == 'csv':
+                import pandas as pd
+                df = pd.read_csv(full_path)
+                return df.to_dict('records')
+            elif file_type == 'json':
+                import json
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data if isinstance(data, list) else [data]
+            else:
+                logger.error(f"Tipo de archivo no soportado: {file_type}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error extrayendo archivo: {e}")
+            return []
+
+    async def load(self, data: List[Dict[str, Any]], file_path: str, 
+                   file_type: Optional[str] = None, **kwargs) -> bool:
+        """
+        Carga datos en un archivo.
+        
+        Args:
+            data: Datos a cargar
+            file_path: Ruta del archivo
+            file_type: Tipo de archivo
+            
+        Returns:
+            bool: True si fue exitoso
+        """
+        try:
+            full_path = self.base_path / file_path
+            
+            # Crear directorio padre si no existe
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Determinar tipo de archivo si no se especifica
+            if not file_type:
+                file_type = full_path.suffix.lower().lstrip('.')
+            
+            if file_type == 'csv':
+                import pandas as pd
+                df = pd.DataFrame(data)
+                df.to_csv(full_path, index=False, encoding='utf-8')
+            elif file_type == 'json':
+                import json
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            else:
+                logger.error(f"Tipo de archivo no soportado: {file_type}")
+                return False
+            
+            logger.info(f"Archivo creado exitosamente: {full_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creando archivo: {e}")
+            return False
+
     
     async def load(self, data: List[Dict[str, Any]], file_path: str, 
                    file_type: Optional[str] = None, **kwargs) -> bool:
