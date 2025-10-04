@@ -43,6 +43,7 @@ class FirestoreConfig(BaseSettings):
     project_id: str
     collection: str
     database: str = "" 
+    agent_id: str = Field(default="default_agent", description="ID del agente asociado a los registros")
 
     model_config = {
         "env_prefix": "FIRESTORE_",

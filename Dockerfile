@@ -1,44 +1,40 @@
+# Imagen base de Python
+FROM python:3.9-slim
 
-# ------------------------
-# Etapa 1: Build
-# ------------------------
-# Stage de compilación (build stage)
-FROM python:3.12-slim AS builder
+# Establecer variables de entorno
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
-# Establece el directorio de trabajo dentro del contenedor
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crear directorio de trabajo
 WORKDIR /app
 
-# Copia los archivos de definición de dependencias y los instala
-# Utiliza .dockerignore para excluir archivos innecesarios
+# Copiar archivos de dependencias
 COPY requirements.txt .
 
-# Instalar TODAS las dependencias (incluyendo dev) para build
-RUN pip install --no-cache-dir -r requirements.txt
+# Instalar dependencias de Python
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente necesario
-COPY src ./src/
+# Copiar el código fuente
+COPY src/ ./src/
 
-# ------------------------
-# Etapa 2: Producción
-# ------------------------
-# Stage de Producción (production stage)
-FROM python:3.12-slim
+# AGREGAR archivo __init__.py para que src sea reconocido como paquete
+RUN touch src/__init__.py
 
-# Establecemos el directorio de trabajo
-WORKDIR /app
-
-# Copiamos las dependencias instaladas desde la etapa de construcción
-# Esto copia solo lo esencial para ejecutar la aplicación, no todas las herramientas de construcción.
-COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
-
-# Copiamos el resto de los archivos de la aplicación desde la etapa de construcción
-COPY --from=builder /app .
-
-# Exponemos el puerto en el que correrá la aplicación (ejemplo para una app web)
-EXPOSE 3000
-
-# Cambiar al usuario no root
+# Crear usuario no-root para seguridad
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
 USER appuser
 
-# Comando por defecto
-CMD ["python", "src/main.py"]
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
+CMD ["python", "-m", "src.main"]

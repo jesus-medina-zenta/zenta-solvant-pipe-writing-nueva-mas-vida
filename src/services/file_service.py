@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import pandas as pd
 
-from .base_service import BaseService
-from ..utils.logger import get_logger
+from src.services.base_service import BaseService
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

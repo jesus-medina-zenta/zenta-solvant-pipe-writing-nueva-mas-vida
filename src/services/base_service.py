@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 import asyncio
 from contextlib import asynccontextmanager
 
-from ..utils.logger import get_logger
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

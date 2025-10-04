@@ -66,13 +66,13 @@ class Pipeline:
             
             # Paso 2: Transform
             logger.info("Procesando y clasificando documentos...")
-            doc_600_list, doc_200_list = await self.process_and_classify_documents(firestore_data)
+            doc_600_list, doc_200_list, errors = self.process_and_classify_documents(firestore_data)
 
             success = True
             if doc_600_list:
                 logger.info(f"Generando archivo 600 con {len(doc_600_list)} registros...")
-                #success_600 = await self.generate_file_600(doc_600_list)
-                #success = success and success_600
+                success_600 = await self.generate_file_600(doc_600_list)
+                success = success and success_600
             
             if doc_200_list:
                 logger.info(f"Generando archivo 200 con {len(doc_200_list)} registros...")
@@ -96,57 +96,62 @@ class Pipeline:
     
     async def extract_from_firestore(self) -> List[Dict[str, Any]]:
         """
-        Extrae datos de Firestore.
+        Extrae registros de llamadas desde Firestore.
+        SIEMPRE aplica filtros por:
+        - Fecha del día actual
+        - Agente específico configurado
         """
         try:
-            self.firestore_service.connect()
+            # Validar que tenemos el agent_id
+            if not self.firestore_config.agent_id:
+                raise ValueError("FIRESTORE_AGENT_ID debe estar configurado")
             
-            collection_name = self.firestore_config.collection
-            data = await self.firestore_service.extract(collection=collection_name)
+            # Conectar al servicio
+            if not self.firestore_service.connect():
+                logger.error("No se pudo conectar a Firestore")
+                return []
             
-            logger.info(f"Extraídos {len(data)} documentos de Firestore")
-            return data
+            # Extraer con filtros automáticos (día actual + agente)
+            documents = await self.firestore_service.extract(get_firestore_config().collection)
+            
+            logger.info(f"Extracción completada: {len(documents)} registros del día actual para agente {self.firestore_config.agent_id}")
+            
+            return documents
             
         except Exception as e:
-            logger.error(f"Error extrayendo datos de Firestore: {e}")
-            return []
-            
-        except Exception as e:
-            logger.error(f"Error extrayendo datos de Firestore: {e}")
+            logger.error(f"Error en extracción de Firestore: {e}")
             return []
     
-    async def process_and_classify_documents(self, raw_data: List[Dict[str, Any]]) -> tuple[List[Document600], List[Document200]]:
+    def process_and_classify_documents(self, raw_records: List[Dict[str, Any]]) -> tuple[List[Document600], List[Document200], int]:
         """
-        Procesa los datos de Firestore y los clasifica según el resultado de la llamada.
-        
-        Args:
-            raw_data: Datos extraídos de Firestore
-            
-        Returns:
-            tuple: (documentos_600, documentos_200)
+        Procesa registros y los clasifica para archivos 600 y 200.
+        PP ahora genera AMBOS archivos (600 Y 200).
         """
         doc_600_list = []
         doc_200_list = []
         errors = 0
         
-        for doc_data in raw_data:
+        for record in raw_records:
             try:
-                # Validar estructura básica con Pydantic
-                call_record = FirestoreCallRecord(**doc_data)
-                
-                # Obtener datos necesarios
+                call_record = FirestoreCallRecord(**record)
                 rut = call_record.get_rut()
+                
                 if not rut:
                     logger.warning(f"Registro sin RUT válido: {call_record.conversation_id}")
                     errors += 1
                     continue
                 
+                # Obtener outcome final
                 final_outcome = call_record.get_final_call_outcome()
-                processed_datetime = call_record.get_processed_datetime()
                 
-                # Clasificar según el resultado de la llamada
-                if final_outcome == CallOutcome.PP:
-                    # Crear documento 600 (Promesa de Pago)
+                if not final_outcome:
+                    logger.warning(f"Registro sin outcome: {call_record.conversation_id}")
+                    errors += 1
+                    continue
+                
+                # PP genera AMBOS archivos
+                if final_outcome == "PP":
+                    # 1. Crear documento 600 (Promesa de Pago)
                     due_date = call_record.get_due_date()
                     amount_due = call_record.get_amount_due()
                     
@@ -154,32 +159,34 @@ class Pipeline:
                         doc_600 = Document600(
                             rut=rut,
                             agent_id=call_record.get_agent_name(),
-                            processed_at=processed_datetime,
+                            processed_at=call_record.get_processed_datetime(),
                             due_date=due_date,
                             amount_due=amount_due
                         )
                         doc_600_list.append(doc_600)
+                        logger.debug(f"Documento 600 creado para: {call_record.conversation_id}")
                     else:
                         logger.warning(f"Promesa de pago sin datos completos: {call_record.conversation_id}")
                         errors += 1
-                else:
-                    # Crear documento 200 (Actividad de Gestión)
-                    doc_200 = Document200(
-                        rut=rut,
-                        processed_at=processed_datetime,
-                        codigo_resultado=final_outcome or "NC",
-                        agent_name="ZNT_TRI",
-                        phone_number=call_record.get_phone_number(),
-                        call_duration=call_record.call_duration_secs
-                    )
-                    doc_200_list.append(doc_200)
                 
+                # TODOS los outcomes (incluyendo PP) generan documento 200
+                doc_200 = Document200(
+                    rut=rut,
+                    processed_at=call_record.get_processed_datetime(),
+                    codigo_resultado=final_outcome,
+                    agent_name=call_record.get_agent_name(),
+                    phone_number=call_record.get_phone_number(),
+                    call_duration=call_record.call_duration_secs
+                )
+                doc_200_list.append(doc_200)
+                logger.debug(f"Documento 200 ({final_outcome}) creado para: {call_record.conversation_id}")
+                    
             except Exception as e:
-                logger.error(f"Error procesando documento: {e}")
+                logger.error(f"Error procesando registro {record.get('conversation_id', 'unknown')}: {e}")
                 errors += 1
         
         logger.info(f"Procesamiento completado: {len(doc_600_list)} archivo 600, {len(doc_200_list)} archivo 200, {errors} errores")
-        return doc_600_list, doc_200_list
+        return doc_600_list, doc_200_list, errors
     
     async def generate_file_600(self, documents: List[Document600]) -> bool:
         """
@@ -187,8 +194,8 @@ class Pipeline:
         """
         try:
             await self.file_service.connect()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"archivo_600_{timestamp}.txt"
+            timestamp = datetime.now().strftime("%Y%m%d")
+            filename = f"{timestamp}_600zenta.txt"
             
             # Generar contenido con posiciones fijas
             content_lines = [doc.build_line() for doc in documents]
@@ -220,8 +227,8 @@ class Pipeline:
         """
         try:
             await self.file_service.connect()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"archivo_200_{timestamp}.txt"
+            timestamp = datetime.now().strftime("%Y%m%d")
+            filename = f"{timestamp}_200zenta.txt"
             
             # Generar contenido con posiciones fijas
             content_lines = [doc.build_line() for doc in documents]

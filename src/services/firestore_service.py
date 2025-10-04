@@ -1,8 +1,9 @@
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 from google.cloud import firestore
 from src.models.data_models import DataRecord
 from src.utils.logger import get_logger
-from ..config import get_firestore_config
+from src.config import get_firestore_config
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -16,6 +17,7 @@ class FirestoreService:
         self.project_id = self.firestore_config.project_id
         self.collection = self.firestore_config.collection
         self.database = self.firestore_config.database
+        self.agent_id = self.firestore_config.agent_id
         self.is_connected = False
 
     def connect(self) -> bool:
@@ -60,24 +62,94 @@ class FirestoreService:
             collection_ref.document(doc_id).set(record_dict)
         logger.info(f"{len(records)} registros guardados en la colección '{self.collection}'")
 
-    async def extract(self, collection: str, filters: Optional[list] = None, order_by: Optional[str] = None) -> list[dict]:
+    async def extract(self, collection: str, **kwargs) -> list[dict]:
         if not self.is_connected or not self.client:
             raise RuntimeError("No hay conexión activa a Firestore. Llama a connect() primero.")
         
         try:
+            #obtener colección
             collection_ref = self.client.collection(collection)
+
+            #construir query hacia la colección
             query = collection_ref
-            
-            if filters:
-                for f in filters:
-                    query = query.where(f["field"], f["operator"], f["value"])
-            
-            if order_by:
-                query = query.order_by(order_by)
-            
+
+            #filtro: agent_id
+            query = self._apply_agent_filter(query)
+
+            #filtro 2: fecha actual
+            #query = self._apply_today_filter(query)
+
+            #ordenar por fecha
+            #query = query.order_by("processed_at", direction=firestore.Query.DESCENDING)
+
             docs = query.stream()
-            results = [doc.to_dict() for doc in docs]
-            return results
+            
+            documents = []
+            today = datetime.now(timezone.utc).date()
+            logger.info(f"Filtrando registros del día: {today.isoformat()}")
+            for doc in docs:
+                doc_data = doc.to_dict()
+                doc_data['document_id'] = doc.id
+                if self._is_today_record(doc_data, today):
+                    documents.append(doc_data)
+            
+            logger.info(f"{len(documents)} documentos extraídos de la colección '{collection}' para el agente '{self.agent_id}'")
+            return documents
         except Exception as e:
             logger.error("Error extrayendo datos de Firestore: %s", e, exc_info=True)
             return []
+    
+    def _is_today_record(self, doc_data: Dict[str, Any], today: datetime.date) -> bool:
+        """
+        Verifica si un registro es del día actual.
+        """
+        try:
+            processed_at_str = doc_data.get('processed_at')
+            if not processed_at_str:
+                logger.warning(f"Documento {doc_data.get('document_id')} sin campo 'processed_at'")
+                return False
+            
+            # Manejar diferentes formatos de fecha
+            processed_at_str = str(processed_at_str)
+            
+            # Formato: "2025-09-22T17:14:53.316Z"
+            if processed_at_str.endswith('Z'):
+                processed_at_str = processed_at_str.replace('Z', '+00:00')
+            
+            # Convertir a datetime
+            processed_dt = datetime.fromisoformat(processed_at_str)
+            
+            # Convertir a UTC si no tiene timezone
+            if processed_dt.tzinfo is None:
+                processed_dt = processed_dt.replace(tzinfo=timezone.utc)
+            
+            # Comparar solo la fecha (sin hora)
+            processed_date = processed_dt.date()
+            
+            is_today = processed_date == today
+            
+            if is_today:
+                logger.debug(f"Registro del día actual: {processed_at_str}")
+            
+            return is_today
+        except Exception as e:
+            logger.warning(f"Error procesando fecha 'processed_at' en documento {doc_data.get('document_id')}: {e}")
+            return False
+
+    def _apply_agent_filter(self, query):
+        """
+        Aplica filtro OBLIGATORIO por ID de agente.
+        """
+        try:
+            logger.info(f"FILTRO OBLIGATORIO - Agente: {self.agent_id}")
+            
+            # Filtrar por agent_id
+            query = query.where(
+                "agent_id", "==", self.agent_id
+            )
+            
+            return query
+            
+        except Exception as e:
+            logger.error(f"Error aplicando filtro de agente: {e}")
+            raise e  # Re-lanzar error porque es filtro obligatorio
