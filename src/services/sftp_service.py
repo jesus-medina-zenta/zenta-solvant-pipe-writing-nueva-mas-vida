@@ -1,6 +1,7 @@
 import paramiko
-from typing import List, Dict, Any, Optional
+import os
 
+from typing import List, Dict, Any, Optional
 from src.utils.logger import get_logger
 from src.services.base_service import BaseService
 
@@ -117,7 +118,6 @@ class SFTPService(BaseService):
         
         try:
             # Crear directorio local si no existe
-            import os
             local_dir = os.path.dirname(local_path)
             if local_dir:
                 os.makedirs(local_dir, exist_ok=True)
