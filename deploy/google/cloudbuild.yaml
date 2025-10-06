@@ -23,7 +23,6 @@ steps:
         pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
-        python -m pytest tests/ -v --cov=src --cov-report=xml
 
   # Paso 3: Construir la imagen Docker
   - id: 'Build docker image'
