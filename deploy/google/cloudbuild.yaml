@@ -30,6 +30,7 @@ steps:
         pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
+        
 
   # Paso 3: Construir la imagen Docker
   - id: 'Build docker image'
