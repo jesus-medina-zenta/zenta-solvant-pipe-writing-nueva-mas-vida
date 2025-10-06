@@ -1,17 +1,17 @@
 steps:
-  - id: 'Post-deployment notification'
-    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        gcloud scheduler jobs update http ${_COMPONENT_NAME}-job \
-          --location ${_REGION} \
-          --schedule="0 20 * * *" \ 
-          --uri="https://${_REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${_COMPONENT_NAME}-${_ENV}:run" \
-          --http-method POST \
-          --time-zone=America/Santiago \
-          --oauth-service-account-email ${_RUN_SERVICE_ACCOUNT_EMAIL}
+#  - id: 'Post-deployment notification'
+#   name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+#    entrypoint: 'bash'
+#    args:
+#      - '-c'
+#      - |
+#        gcloud scheduler jobs update http ${_COMPONENT_NAME}-job \
+#          --location ${_REGION} \
+#          --schedule="0 20 * * *" \ 
+#          --uri="https://${_REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${_COMPONENT_NAME}-${_ENV}:run" \
+#          --http-method POST \
+#          --time-zone=America/Santiago \
+#          --oauth-service-account-email ${_RUN_SERVICE_ACCOUNT_EMAIL}
   # Paso 1: Instalar dependencias
   - name: 'python:3.9'
     entrypoint: 'bash'
