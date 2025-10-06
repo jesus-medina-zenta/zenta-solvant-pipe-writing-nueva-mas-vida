@@ -1,10 +1,17 @@
 steps:
-  - id: 'shallow clone'
-    name: 'gcr.io/cloud-builders/git'
-    entrypoint: 'git'
-    args:
-      - 'fetch'
-      - '--unshallow'
+#  - id: 'Post-deployment notification'
+#   name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+#    entrypoint: 'bash'
+#    args:
+#      - '-c'
+#      - |
+#        gcloud scheduler jobs update http ${_COMPONENT_NAME}-job \
+#          --location ${_REGION} \
+#          --schedule="0 20 * * *" \ 
+#          --uri="https://${_REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${_COMPONENT_NAME}-${_ENV}:run" \
+#          --http-method POST \
+#          --time-zone=America/Santiago \
+#          --oauth-service-account-email ${_RUN_SERVICE_ACCOUNT_EMAIL}
   # Paso 1: Instalar dependencias
   - name: 'python:3.9'
     entrypoint: 'bash'
@@ -57,7 +64,16 @@ steps:
       - '--service-account'
       - '${_RUN_SERVICE_ACCOUNT_EMAIL}'
       - '--set-env-vars=ENV=${_ENV}'
-      - '--set-env-vars=PROJECT_ID=$PROJECT_ID'
+      - '--set-env-vars=PROJECT_ID=${_PROJECT_ID}'
+      - '--set-env-vars=FIRESTORE_PROJECT_ID=$PROJECT_ID'
+      - '--set-env-vars=FIRESTORE_COLLECTION=${_FIRESTORE_COLLECTION}'
+      - '--set-env-vars=FIRESTORE_DATABASE=${_FIRESTORE_DATABASE}'
+      - '--set-env-vars=FIRESTORE_AGENT_ID=${_FIRESTORE_AGENT_ID}'
+      - '--set-env-vars=SFTP_HOST=${_SFTP_HOST}'
+      - '--set-env-vars=SFTP_PORT=${_SFTP_PORT}'
+      - '--set-env-vars=SFTP_USERNAME=${_SFTP_USERNAME}'
+      - '--set-env-vars=SFTP_PASSWORD=${_SFTP_PASSWORD}'
+      - '--set-env-vars=EXPORT_SFTP_TXT_PATH=${_EXPORT_SFTP_TXT_PATH}'
 
 
 # Configuraciones adicionales

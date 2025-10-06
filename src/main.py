@@ -4,9 +4,9 @@ Punto de entrada principal de la aplicación.
 import sys
 import asyncio
 
-from .config import init_config
-from .pipeline import Pipeline
-from .utils.logger import get_logger
+from src.config import init_config
+from src.pipeline import Pipeline
+from src.utils.logger import get_logger
 
 # Inicializar configuración
 config = init_config()
