@@ -5,7 +5,6 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from pathlib import Path
-import pandas as pd
 
 #models
 from src.models.firestore_records import FirestoreCallRecord, CallOutcome, Document600, Document200
@@ -13,7 +12,6 @@ from src.models.firestore_records import FirestoreCallRecord, CallOutcome, Docum
 #Services
 from src.services.firestore_service import FirestoreService
 from src.services.sftp_service import SFTPService
-from src.services.firestore_service import FirestoreService
 from src.services.file_service import FileService
 
 from .config import (
@@ -59,7 +57,7 @@ class Pipeline:
             # Paso 1: Extract
             logger.info("Iniciando extracción de Firestore")
             firestore_data = await self.extract_from_firestore()
-            print(f"Datos extraídos: {firestore_data}")
+            logger.debug(f"Datos extraídos: {len(firestore_data) if firestore_data else 0} registros")
             if not firestore_data:
                 logger.warning("No se encontraron datos en Firestore")
                 return True
@@ -112,7 +110,10 @@ class Pipeline:
                 return []
             
             # Extraer con filtros automáticos (día actual + agente)
-            documents = await self.firestore_service.extract(get_firestore_config().collection)
+            documents = await asyncio.to_thread(
+                self.firestore_service.extract, 
+                get_firestore_config().collection
+            )
             
             logger.info(f"Extracción completada: {len(documents)} registros del día actual para agente {self.firestore_config.agent_id}")
             
@@ -259,11 +260,8 @@ class Pipeline:
         Sube un archivo al SFTP.
         """
         try:
-            if not self.sftp_service.connect():
-                logger.error("No se pudo conectar al servidor SFTP")
-                return False
-            
-            success = self.sftp_service.upload_file(local_path, remote_path)
+            # Ejecutar las operaciones SFTP síncronas en un thread separado
+            success = await asyncio.to_thread(self._sync_upload_to_sftp, local_path, remote_path)
             
             if success:
                 logger.info(f"Archivo subido exitosamente: {remote_path}")
@@ -274,6 +272,22 @@ class Pipeline:
             
         except Exception as e:
             logger.error(f"Error en _upload_to_sftp: {e}")
+            return False
+    
+    def _sync_upload_to_sftp(self, local_path: str, remote_path: str) -> bool:
+        """
+        Operación síncrona de subida a SFTP.
+        """
+        try:
+            if not self.sftp_service.connect():
+                logger.error("No se pudo conectar al servidor SFTP")
+                return False
+            
+            success = self.sftp_service.upload_file(local_path, remote_path)
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error en _sync_upload_to_sftp: {e}")
             return False
         finally:
             self.sftp_service.disconnect()

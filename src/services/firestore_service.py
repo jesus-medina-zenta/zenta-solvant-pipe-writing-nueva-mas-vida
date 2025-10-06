@@ -62,7 +62,7 @@ class FirestoreService:
             collection_ref.document(doc_id).set(record_dict)
         logger.info(f"{len(records)} registros guardados en la colección '{self.collection}'")
 
-    async def extract(self, collection: str, **kwargs) -> list[dict]:
+    def extract(self, collection: str, **kwargs) -> list[dict]:
         if not self.is_connected or not self.client:
             raise RuntimeError("No hay conexión activa a Firestore. Llama a connect() primero.")
         

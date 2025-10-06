@@ -52,11 +52,10 @@ class FirestoreCallRecord(BaseModel):
             # Si tiene 9 dígitos, quitar el último (dígito verificador)
             if len(rut_clean) == 9:
                 rut_clean = rut_clean[:-1]  # Quitar último dígito → 8 dígitos
-            # Si tiene 8 dígitos, también quitar el último (dígito verificador)
+            # Si tiene 8 dígitos, dejar tal cual (ya es el formato esperado)
             elif len(rut_clean) == 8:
-                rut_clean = rut_clean[:-1]  # Quitar último dígito → 7 dígitos
-                rut_clean = rut_clean.zfill(8)  # Completar con cero al inicio → 8 dígitos
-            # Si tiene menos de 8 dígitos, anteponer 0
+                pass  # Ya tiene la longitud correcta
+            # Si tiene menos de 8 dígitos, completar con ceros al inicio
             elif len(rut_clean) < 8:
                 rut_clean = rut_clean.zfill(8)
             

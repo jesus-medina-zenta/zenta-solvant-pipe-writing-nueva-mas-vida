@@ -67,10 +67,12 @@ class SFTPService(BaseService):
         try:
             # Crear directorios remotos si no existen
             remote_dir = remote_path.rsplit('/', 1)[0]
-            try:
-                self._create_remote_directory(remote_dir)
-            except Exception as e:
-                logger.warning(f"No se pudo crear directorio remoto {remote_dir}: {e}")
+            # Validar que remote_dir no sea vacío y no sea igual a remote_path antes de crear el directorio
+            if remote_dir and remote_dir != remote_path and '/' in remote_path:
+                try:
+                    self._create_remote_directory(remote_dir)
+                except Exception as e:
+                    logger.warning(f"No se pudo crear directorio remoto {remote_dir}: {e}")
             
             # Subir archivo
             self.sftp_client.put(local_path, remote_path)
