@@ -25,7 +25,6 @@ async def main() -> int:
     try:
         # Inicializar el pipeline
         pipeline = Pipeline()
-
         # Ejecutar el pipeline
         result = await pipeline.run()
 
