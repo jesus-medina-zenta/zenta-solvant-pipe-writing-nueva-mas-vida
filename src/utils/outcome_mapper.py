@@ -11,7 +11,7 @@ class OutcomeMapping:
         "DE": "SIN EMPLEO",
         "NC": "NO CONTACTADO",
         "LI": "CORTE TECNICO", 
-        "IN": "NUMERO ERRONEO",
+        "IN": "NO UBICABLE",
         "BV": "BUZON VOZ",
         "FO": "FALLECIDO"
     }

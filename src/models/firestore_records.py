@@ -54,7 +54,7 @@ class FirestoreCallRecord(BaseModel):
                 rut_clean = rut_clean[:-1]  # Quitar último dígito → 8 dígitos
             # Si tiene 8 dígitos, dejar tal cual (ya es el formato esperado)
             elif len(rut_clean) == 8:
-                pass  # Ya tiene la longitud correcta
+                rut_clean = rut_clean[:-1]
             # Si tiene menos de 8 dígitos, completar con ceros al inicio
             elif len(rut_clean) < 8:
                 rut_clean = rut_clean.zfill(8)
@@ -200,6 +200,8 @@ class Document200(BaseModel):
         line += "6"
         
         # Pos 5-29: Número de cuenta (25 caracteres)
+        if(len(self.rut) < 8):
+            self.rut = self.rut.zfill(8)
         numero_cuenta = f"TRI{self.rut}"
         line += numero_cuenta.ljust(25)[:25]
         
