@@ -196,7 +196,7 @@ class Pipeline:
         try:
             await self.file_service.connect()
             timestamp = datetime.now().strftime("%Y%m%d")
-            filename = f"{timestamp}_600zenta.txt"
+            filename = f"{timestamp}_600ZENTA.txt"
             
             # Generar contenido con posiciones fijas
             content_lines = [doc.build_line() for doc in documents]
@@ -229,7 +229,7 @@ class Pipeline:
         try:
             await self.file_service.connect()
             timestamp = datetime.now().strftime("%Y%m%d")
-            filename = f"{timestamp}_200zenta.txt"
+            filename = f"{timestamp}_200ZENTA.txt"
             
             # Generar contenido con posiciones fijas
             content_lines = [doc.build_line() for doc in documents]
