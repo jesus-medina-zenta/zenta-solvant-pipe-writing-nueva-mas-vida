@@ -32,6 +32,9 @@ class FirestoreCallRecord(BaseModel):
     # Análisis de resultados
     analysis: Optional[Dict[str, Any]] = None
     evaluation_criteria_results: Optional[Dict[str, Any]] = None
+
+    # Guardado por el webhook de post-call directamente en la raíz del documento
+    fecha_compromiso: Optional[str] = None
     
     @validator('processed_at')
     def validate_processed_at(cls, v):
@@ -44,7 +47,7 @@ class FirestoreCallRecord(BaseModel):
     
     def get_rut(self) -> Optional[str]:
         """Extrae el RUT desde dynamic_variables."""
-        rut = self.dynamic_variables.get('rut')
+        rut = self.dynamic_variables.get('rut_deudor')
         if rut:
             # Convertir a string y limpiar
             rut_clean = str(rut).replace('.', '').replace('-', '').replace(' ', '')
@@ -93,12 +96,12 @@ class FirestoreCallRecord(BaseModel):
         return datetime.fromisoformat(self.processed_at.replace('Z', '+00:00'))
     
     def get_due_date(self) -> Optional[str]:
-        """Extrae la fecha de vencimiento."""
-        return self.dynamic_variables.get('overdue_date1')
-    
+        """Extrae la fecha de compromiso de pago (guardada por el webhook post-call)."""
+        return self.fecha_compromiso or None
+
     def get_amount_due(self) -> Optional[int]:
         """Extrae el monto adeudado."""
-        amount = self.dynamic_variables.get('overdue_amount1')
+        amount = self.dynamic_variables.get('deuda_cotizaciones')
         if amount:
             # Convertir a entero si es string
             return int(str(amount).replace(',', '').replace('.', ''))
