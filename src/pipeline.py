@@ -68,14 +68,14 @@ class Pipeline:
 
             success = True
             if doc_600_list:
-                logger.info(f"Generando archivo 600 con {len(doc_600_list)} registros...")
-                success_600 = await self.generate_file_600(doc_600_list)
-                success = success and success_600
-            
+                logger.info(f"Generando Excel PP con {len(doc_600_list)} registros...")
+                success_pp = await self.generate_excel_pp(doc_600_list)
+                success = success and success_pp
+
             if doc_200_list:
-                logger.info(f"Generando archivo 200 con {len(doc_200_list)} registros...")
-                success_200 = await self.generate_file_200(doc_200_list)
-                success = success and success_200
+                logger.info(f"Generando Excel de todos los resultados con {len(doc_200_list)} registros...")
+                success_todos = await self.generate_excel_todos(doc_200_list)
+                success = success and success_todos
             
             if success:
                 logger.info("Pipeline completado exitosamente")
@@ -189,70 +189,57 @@ class Pipeline:
         logger.info(f"Procesamiento completado: {len(doc_600_list)} archivo 600, {len(doc_200_list)} archivo 200, {errors} errores")
         return doc_600_list, doc_200_list, errors
     
-    async def generate_file_600(self, documents: List[Document600]) -> bool:
+    async def generate_excel_pp(self, documents: List[Document600]) -> bool:
         """
-        Genera archivo 600 con estructura de posiciones fijas.
+        Genera el Excel de Promesas de Pago (PP) y lo sube a SFTP en una
+        subcarpeta con la fecha del día (igual que los audios).
         """
-        try:
-            await self.file_service.connect()
-            timestamp = datetime.now().strftime("%Y%m%d")
-            filename = f"{timestamp}_600ZENTA.txt"
-            
-            # Generar contenido con posiciones fijas
-            content_lines = [doc.build_line() for doc in documents]
-            
-            # Crear archivo temporal
-            temp_path = self.file_service.base_path / filename
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(content_lines))
-            
-            logger.info(f"Archivo 600 generado: {filename} con {len(content_lines)} líneas")
-            
-            # Subir al SFTP
-            remote_path = f"{self.export_config.sftp_txt_path}/{filename}"
-            success = await self._upload_to_sftp(str(temp_path), remote_path)
-            
-            # Limpiar archivo temporal
-            if temp_path.exists():
-                temp_path.unlink()
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"Error generando archivo 600: {e}")
-            return False
+        return await self._generate_and_upload_excel(
+            rows=[doc.to_row() for doc in documents],
+            filename_suffix="PP",
+        )
 
-    async def generate_file_200(self, documents: List[Document200]) -> bool:
+    async def generate_excel_todos(self, documents: List[Document200]) -> bool:
         """
-        Genera archivo 200 con estructura de posiciones fijas.
+        Genera el Excel con todos los resultados de gestión y lo sube a SFTP
+        en una subcarpeta con la fecha del día (igual que los audios).
+        """
+        return await self._generate_and_upload_excel(
+            rows=[doc.to_row() for doc in documents],
+            filename_suffix="TODOS",
+        )
+
+    async def _generate_and_upload_excel(self, rows: List[Dict[str, Any]], filename_suffix: str) -> bool:
+        """
+        Genera un Excel a partir de filas ya construidas y lo sube al SFTP
+        dentro de una subcarpeta con la fecha del día (ddmmyyyy).
         """
         try:
             await self.file_service.connect()
             timestamp = datetime.now().strftime("%Y%m%d")
-            filename = f"{timestamp}_200ZENTA.txt"
-            
-            # Generar contenido con posiciones fijas
-            content_lines = [doc.build_line() for doc in documents]
-            
-            # Crear archivo temporal
+            filename = f"{timestamp}_{filename_suffix}.xlsx"
+
+            success_write = await self.file_service.load(rows, filename, file_type="xlsx")
+            if not success_write:
+                logger.error(f"Error generando Excel: {filename}")
+                return False
+
+            logger.info(f"Excel generado: {filename} con {len(rows)} filas")
+
+            # Subir al SFTP en una subcarpeta con la fecha del día (ddmmyyyy)
             temp_path = self.file_service.base_path / filename
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(content_lines))
-            
-            logger.info(f"Archivo 200 generado: {filename} con {len(content_lines)} líneas")
-            
-            # Subir al SFTP
-            remote_path = f"{self.export_config.sftp_txt_path}/{filename}"
+            date_folder = datetime.now().strftime("%d%m%Y")
+            remote_path = f"{self.export_config.sftp_txt_path}/{date_folder}/{filename}"
             success = await self._upload_to_sftp(str(temp_path), remote_path)
-            
+
             # Limpiar archivo temporal
             if temp_path.exists():
                 temp_path.unlink()
-            
+
             return success
-            
+
         except Exception as e:
-            logger.error(f"Error generando archivo 200: {e}")
+            logger.error(f"Error generando Excel {filename_suffix}: {e}")
             return False
 
     async def _upload_to_sftp(self, local_path: str, remote_path: str) -> bool:
