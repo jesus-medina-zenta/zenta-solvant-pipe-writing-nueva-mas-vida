@@ -20,7 +20,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Instalar dependencias de Python
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código fuente
