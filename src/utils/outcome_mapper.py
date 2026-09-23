@@ -12,6 +12,7 @@ class OutcomeMapping:
         "NC": "NO CONTACTADO",
         "LI": "CORTE TECNICO", 
         "IN": "NO UBICABLE",
+        "ND": "NO DISPONIBLE",
         "BV": "BUZON VOZ",
         "FO": "FALLECIDO"
     }

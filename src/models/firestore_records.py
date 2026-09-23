@@ -35,6 +35,7 @@ class FirestoreCallRecord(BaseModel):
 
     # Guardado por el webhook de post-call directamente en la raíz del documento
     fecha_compromiso: Optional[str] = None
+    agendar_llamada: Optional[str] = None
     
     @validator('processed_at')
     def validate_processed_at(cls, v):
@@ -99,6 +100,10 @@ class FirestoreCallRecord(BaseModel):
         """Extrae la fecha de compromiso de pago (guardada por el webhook post-call)."""
         return self.fecha_compromiso or None
 
+    def get_agendar_llamada(self) -> Optional[str]:
+        """Extrae la fecha/hora de recontacto (guardada por el webhook post-call)."""
+        return self.agendar_llamada or None
+
     def get_amount_due(self) -> Optional[int]:
         """Extrae el monto adeudado."""
         amount = self.dynamic_variables.get('deuda_cotizaciones')
@@ -161,6 +166,7 @@ class Document200(BaseModel):
     agent_name: str
     phone_number: Optional[str] = None
     call_duration: int = 0
+    agendar_llamada: Optional[str] = None
 
     def to_row(self) -> Dict[str, Any]:
         """Construye una fila del Excel con todos los resultados."""
@@ -175,4 +181,5 @@ class Document200(BaseModel):
             "Descripción Resultado": OutcomeMapping.get_description(self.codigo_resultado),
             "Teléfono": _format_phone(self.phone_number),
             "Duración Llamada (s)": self.call_duration,
+            "Fecha/Hora Recontacto": self.agendar_llamada or "",
         }

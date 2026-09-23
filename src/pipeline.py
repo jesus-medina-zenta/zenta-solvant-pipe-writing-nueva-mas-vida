@@ -177,7 +177,8 @@ class Pipeline:
                     codigo_resultado=final_outcome,
                     agent_name=call_record.get_agent_name(),
                     phone_number=call_record.get_phone_number(),
-                    call_duration=call_record.call_duration_secs
+                    call_duration=call_record.call_duration_secs,
+                    agendar_llamada=call_record.get_agendar_llamada()
                 )
                 doc_200_list.append(doc_200)
                 logger.debug(f"Documento 200 ({final_outcome}) creado para: {call_record.conversation_id}")
