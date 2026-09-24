@@ -98,6 +98,31 @@ def test_compromiso_de_pago_genera_fila_en_pp_y_en_todos():
     }
 
 
+def test_reporte_por_carga_agrega_como_nc_a_quien_no_contesto():
+    sources = {
+        **SOURCE,
+        "track-2": {
+            "track_id": "track-2",
+            "phone_number": "+56987654321",
+            "processed_at": "2026-09-24T20:14:00Z",
+            "metadata_user": {"rut_deudor": "22222222K", "nombre_deudor": "SOTO ROJAS MARIA", "deuda_cotizaciones": "5000"},
+        },
+    }
+    pipeline = Pipeline.__new__(Pipeline)
+    calls = [_call("PP", fecha_compromiso="el quince")]
+
+    _, todos, _ = pipeline.process_and_classify_documents(calls, sources)
+    todos += pipeline.build_not_contacted_rows(calls, sources)
+
+    assert [row.to_row()["RUT Deudor"] for row in todos] == ["11111111K", "22222222K"]
+    no_contesto = todos[1].to_row()
+    assert no_contesto["Resultado"] == "NC"
+    assert no_contesto["Descripción Resultado"] == "NO CONTACTADO"
+    assert no_contesto["Teléfono Gestionado"] == "987654321"
+    assert no_contesto["Monto Deuda ($)"] == 5000
+    assert no_contesto["ID Conversación"] == ""
+
+
 def test_sin_fila_de_origen_usa_las_variables_de_la_llamada():
     _, todos, errors = _process([_call("NC", track_id="no-existe")], sources={})
 

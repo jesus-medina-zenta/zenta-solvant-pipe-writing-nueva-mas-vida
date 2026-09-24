@@ -2,6 +2,7 @@
 Lógica principal del pipeline ETL.
 """
 import asyncio
+import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,9 @@ class Pipeline:
         self.export_config = get_file_export_config()
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
-        
+        # Si viene, el reporte se arma solo con esa carga (ej. "24092026-f5231027-...")
+        self.report_carga_id = os.getenv("REPORT_CARGA_ID", "").strip()
+
     async def run(self) -> bool:
         """
         Ejecuta el pipeline completo.
@@ -60,23 +63,39 @@ class Pipeline:
         logger.info("Iniciando ejecución del pipeline")
         
         try:
-            # Paso 1: Extract
-            logger.info("Iniciando extracción de Firestore")
-            firestore_data = await self.extract_from_firestore()
-            logger.debug(f"Datos extraídos: {len(firestore_data) if firestore_data else 0} registros")
-            if not firestore_data:
-                logger.warning("No se encontraron datos en Firestore")
-                return True
-            
-            # Paso 2: Filas originales del archivo del cliente, para cruzar el reporte con su base
-            source_records = await asyncio.to_thread(
-                self.firestore_service.get_source_records,
-                [(r.get('dynamic_variables') or {}).get('track_id') for r in firestore_data],
-            )
+            if self.report_carga_id:
+                # Reporte de una sola carga: todas sus personas, contestaran o no
+                logger.info(f"Reporte por carga: {self.report_carga_id}")
+                if not self.firestore_service.connect():
+                    logger.error("No se pudo conectar a Firestore")
+                    return False
+                source_records = await asyncio.to_thread(
+                    self.firestore_service.get_source_records_by_carga, self.report_carga_id)
+                if not source_records:
+                    logger.warning(f"La carga {self.report_carga_id} no tiene registros")
+                    return True
+                firestore_data = await asyncio.to_thread(
+                    self.firestore_service.get_calls_by_track_ids, list(source_records))
+            else:
+                # Paso 1: Extract
+                logger.info("Iniciando extracción de Firestore")
+                firestore_data = await self.extract_from_firestore()
+                logger.debug(f"Datos extraídos: {len(firestore_data) if firestore_data else 0} registros")
+                if not firestore_data:
+                    logger.warning("No se encontraron datos en Firestore")
+                    return True
+
+                # Paso 2: Filas originales del archivo del cliente, para cruzar el reporte con su base
+                source_records = await asyncio.to_thread(
+                    self.firestore_service.get_source_records,
+                    [(r.get('dynamic_variables') or {}).get('track_id') for r in firestore_data],
+                )
 
             # Paso 3: Transform
             logger.info("Procesando y clasificando documentos...")
             doc_600_list, doc_200_list, errors = self.process_and_classify_documents(firestore_data, source_records)
+            if self.report_carga_id:
+                doc_200_list += self.build_not_contacted_rows(firestore_data, source_records)
 
             success = True
             if doc_600_list:
@@ -135,15 +154,48 @@ class Pipeline:
             logger.error(f"Error en extracción de Firestore: {e}")
             return []
     
+    def build_not_contacted_rows(
+        self,
+        calls: List[Dict[str, Any]],
+        source_records: Dict[str, Dict[str, Any]],
+    ) -> List[Document200]:
+        """
+        Filas NC para las personas de la carga sin llamada registrada: ElevenLabs
+        no avisa de las llamadas que no se contestan, así que no quedan en
+        registros_llamadas.
+        """
+        called = {(c.get('dynamic_variables') or {}).get('track_id') for c in calls}
+        rows = []
+        for track_id, source in source_records.items():
+            if track_id in called:
+                continue
+            cliente = self.build_client_data(None, source)
+            if not cliente:
+                continue
+            processed = str(source.get('processed_at') or source.get('fecha') or '')
+            try:
+                processed_at = datetime.fromisoformat(processed.replace('Z', '+00:00'))
+            except ValueError:
+                processed_at = datetime.now(timezone.utc)
+            rows.append(Document200(
+                cliente=cliente,
+                processed_at=processed_at,
+                codigo_resultado="NC",
+                agent_name="ZNT_NMV",
+                conversation_id="",
+            ))
+        logger.info(f"{len(rows)} personas de la carga sin llamada contestada (NC)")
+        return rows
+
     @staticmethod
-    def build_client_data(call_record: FirestoreCallRecord, source: Optional[Dict[str, Any]]) -> Optional[ClientData]:
+    def build_client_data(call_record: Optional[FirestoreCallRecord], source: Optional[Dict[str, Any]]) -> Optional[ClientData]:
         """
         Datos del deudor tal como venían en el archivo del cliente. Si la fila de
         origen no se encuentra (llamadas antiguas o sueltas), usa las variables
         dinámicas de la llamada.
         """
         metadata = (source or {}).get('metadata_user') or {}
-        variables = call_record.dynamic_variables
+        variables = call_record.dynamic_variables if call_record else {}
 
         rut = str(metadata.get('rut_deudor') or metadata.get('rut') or variables.get('rut_deudor') or '').strip()
         if not rut:
@@ -154,8 +206,9 @@ class Pipeline:
             rut=rut,
             nombre=str(metadata.get('nombre_deudor') or variables.get('name') or ''),
             ciudad=str(metadata.get('ciudad') or ''),
-            telefono=format_phone_9_digits((source or {}).get('phone_number') or call_record.get_phone_number()),
-            monto_deuda=int(monto_digits) if monto_digits else call_record.get_amount_due(),
+            telefono=format_phone_9_digits(
+                (source or {}).get('phone_number') or (call_record.get_phone_number() if call_record else '')),
+            monto_deuda=int(monto_digits) if monto_digits else (call_record.get_amount_due() if call_record else None),
             n_periodos=str(metadata.get('n_periodos') or ''),
             menor_periodo=str(metadata.get('menor_per_deuda') or ''),
             mayor_periodo=str(metadata.get('mayor_per_deuda') or ''),
@@ -262,7 +315,9 @@ class Pipeline:
         try:
             await self.file_service.connect()
             timestamp = datetime.now().strftime("%Y%m%d")
-            filename = f"{timestamp}_{filename_suffix}.xlsx"
+            # En modo carga se agrega el inicio del id de la carga para no pisar el reporte del día
+            carga_tag = f"_lote-{self.report_carga_id.split('-')[1]}" if '-' in self.report_carga_id else ""
+            filename = f"{timestamp}{carga_tag}_{filename_suffix}.xlsx"
 
             success_write = await self.file_service.load(rows, filename, file_type="xlsx")
             if not success_write:

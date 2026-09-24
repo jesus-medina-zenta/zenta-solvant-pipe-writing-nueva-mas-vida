@@ -67,6 +67,36 @@ class FirestoreService:
         logger.info(f"{len(records)}/{len(unique_ids)} registros de origen encontrados en '{self.firestore_config.source_collection}'")
         return records
 
+    def get_source_records_by_carga(self, carga_id: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Filas de una carga del archivo del cliente (registros_sftp). Devuelve {track_id: documento}.
+        """
+        collection_ref = self.client.collection(self.firestore_config.source_collection)
+        # En registros_sftp el campo "id" guarda el UUID de la carga, sin la fecha adelante
+        carga_uuid = carga_id.split("-", 1)[1] if carga_id[:8].isdigit() and carga_id[8:9] == "-" else carga_id
+        query = collection_ref.where("id", "==", carga_uuid)
+        records = {}
+        for doc in query.stream():
+            data = doc.to_dict() or {}
+            if data.get("track_id"):
+                records[data["track_id"]] = data
+        logger.info(f"{len(records)} registros de la carga {carga_id} en '{self.firestore_config.source_collection}'")
+        return records
+
+    def get_calls_by_track_ids(self, track_ids: List[str]) -> List[Dict[str, Any]]:
+        """Llamadas registradas (registros_llamadas) de los track_id indicados, sin filtro de fecha."""
+        unique_ids = [t for t in dict.fromkeys(track_ids) if t]
+        collection_ref = self.client.collection(self.collection)
+        calls = []
+        for start in range(0, len(unique_ids), 30):
+            chunk = unique_ids[start:start + 30]
+            for doc in collection_ref.where("dynamic_variables.track_id", "in", chunk).stream():
+                data = doc.to_dict() or {}
+                data["document_id"] = doc.id
+                calls.append(data)
+        logger.info(f"{len(calls)} llamadas registradas para {len(unique_ids)} deudores de la carga")
+        return calls
+
     def disconnect(self) -> None:
         if self.client:
             self.client = None
