@@ -115,6 +115,10 @@ class FirestoreCallRecord(BaseModel):
     def get_phone_number(self) -> Optional[str]:
         """Extrae el número de teléfono."""
         return self.dynamic_variables.get('system__called_number')
+
+    def get_track_id(self) -> Optional[str]:
+        """track_id enlaza la llamada con su fila original del archivo (registros_sftp)."""
+        return self.dynamic_variables.get('track_id') or None
     
     def get_agent_name(self) -> str:
         """Extrae el nombre del agente."""
@@ -122,64 +126,90 @@ class FirestoreCallRecord(BaseModel):
         agent_name = "ZNT_NMV"
         return str(agent_name)[:8]  # Máximo 8 caracteres
 
-def _format_phone(phone_number: Optional[str]) -> str:
-    """Limpia el formato internacional del teléfono: +56930012345 → 30012345."""
-    if not phone_number or not str(phone_number).strip():
-        return ""
-    telefono_limpio = str(phone_number).strip().replace('+', '').replace('-', '').replace(' ', '')
-    if telefono_limpio.startswith('56'):
-        telefono_limpio = telefono_limpio[2:]
-    if telefono_limpio.startswith('9'):
-        telefono_limpio = telefono_limpio[1:]
-    return telefono_limpio
+def format_phone_9_digits(phone_number: Optional[str]) -> str:
+    """+56973788338 → 973788338 (mismo formato que la columna de teléfono del archivo del cliente)."""
+    digits = ''.join(ch for ch in str(phone_number or '') if ch.isdigit())
+    if len(digits) == 11 and digits.startswith('56'):
+        digits = digits[2:]
+    return digits
+
+
+class ClientData(BaseModel):
+    """
+    Datos del deudor tal como venían en el archivo del cliente (registros_sftp),
+    para que el reporte se pueda cruzar con la base que enviaron.
+    """
+
+    rut: str
+    nombre: str = ""
+    ciudad: str = ""
+    telefono: str = ""
+    monto_deuda: Optional[int] = None
+    n_periodos: str = ""
+    menor_periodo: str = ""
+    mayor_periodo: str = ""
+    tipo_cartera: str = ""
+
+
+def _fecha_chile(value: datetime) -> str:
+    chile_tz = pytz.timezone('America/Santiago')
+    return value.replace(microsecond=0).astimezone(chile_tz).strftime("%d-%m-%Y %H:%M:%S")
 
 
 class Document600(BaseModel):
     """Fila para el Excel de Promesas de Pago (PP)."""
 
-    rut: str
+    cliente: ClientData
     agent_id: str
     processed_at: datetime
     due_date: str
-    amount_due: int
+    conversation_id: str
 
     def to_row(self) -> Dict[str, Any]:
         """Construye una fila del Excel de Promesas de Pago (PP)."""
-        chile_tz = pytz.timezone('America/Santiago')
-        processed_chile = self.processed_at.replace(microsecond=0).astimezone(chile_tz)
-
         return {
-            "RUT": self.rut,
+            "RUT Deudor": self.cliente.rut,
+            "Nombre Deudor": self.cliente.nombre,
+            "Teléfono Gestionado": self.cliente.telefono,
+            "Monto Deuda ($)": self.cliente.monto_deuda,
+            "Mayor Período de Deuda": self.cliente.mayor_periodo,
+            "Fecha Gestión": _fecha_chile(self.processed_at),
+            "Fecha Compromiso Pago": self.due_date,
             "Agente": self.agent_id,
-            "Fecha Procesada": processed_chile.strftime("%d-%m-%Y %H:%M:%S"),
-            "Fecha Compromiso": self.due_date,
-            "Monto Adeudado": self.amount_due,
+            "ID Conversación": self.conversation_id,
         }
 
 
 class Document200(BaseModel):
     """Fila para el Excel con todos los resultados de gestión."""
 
-    rut: str
+    cliente: ClientData
     processed_at: datetime
     codigo_resultado: str
     agent_name: str
-    phone_number: Optional[str] = None
+    conversation_id: str
     call_duration: int = 0
+    due_date: Optional[str] = None
     agendar_llamada: Optional[str] = None
 
     def to_row(self) -> Dict[str, Any]:
         """Construye una fila del Excel con todos los resultados."""
-        chile_tz = pytz.timezone('America/Santiago')
-        processed_chile = self.processed_at.replace(microsecond=0).astimezone(chile_tz)
-
         return {
-            "RUT": self.rut,
-            "Agente": self.agent_name,
-            "Fecha Procesada": processed_chile.strftime("%d-%m-%Y %H:%M:%S"),
+            "RUT Deudor": self.cliente.rut,
+            "Nombre Deudor": self.cliente.nombre,
+            "Ciudad": self.cliente.ciudad,
+            "Teléfono Gestionado": self.cliente.telefono,
+            "Monto Deuda ($)": self.cliente.monto_deuda,
+            "N° Períodos": self.cliente.n_periodos,
+            "Menor Período de Deuda": self.cliente.menor_periodo,
+            "Mayor Período de Deuda": self.cliente.mayor_periodo,
+            "Tipo de Cartera": self.cliente.tipo_cartera,
+            "Fecha Gestión": _fecha_chile(self.processed_at),
             "Resultado": self.codigo_resultado,
             "Descripción Resultado": OutcomeMapping.get_description(self.codigo_resultado),
-            "Teléfono": _format_phone(self.phone_number),
-            "Duración Llamada (s)": self.call_duration,
+            "Fecha Compromiso Pago": self.due_date or "",
             "Fecha/Hora Recontacto": self.agendar_llamada or "",
+            "Duración Llamada (s)": self.call_duration,
+            "Agente": self.agent_name,
+            "ID Conversación": self.conversation_id,
         }

@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 #models
-from src.models.firestore_records import FirestoreCallRecord, CallOutcome, Document600, Document200
+from src.models.firestore_records import (
+    ClientData,
+    Document200,
+    Document600,
+    FirestoreCallRecord,
+    format_phone_9_digits,
+)
 
 #Services
 from src.services.firestore_service import FirestoreService
@@ -62,9 +68,15 @@ class Pipeline:
                 logger.warning("No se encontraron datos en Firestore")
                 return True
             
-            # Paso 2: Transform
+            # Paso 2: Filas originales del archivo del cliente, para cruzar el reporte con su base
+            source_records = await asyncio.to_thread(
+                self.firestore_service.get_source_records,
+                [(r.get('dynamic_variables') or {}).get('track_id') for r in firestore_data],
+            )
+
+            # Paso 3: Transform
             logger.info("Procesando y clasificando documentos...")
-            doc_600_list, doc_200_list, errors = self.process_and_classify_documents(firestore_data)
+            doc_600_list, doc_200_list, errors = self.process_and_classify_documents(firestore_data, source_records)
 
             success = True
             if doc_600_list:
@@ -123,7 +135,38 @@ class Pipeline:
             logger.error(f"Error en extracción de Firestore: {e}")
             return []
     
-    def process_and_classify_documents(self, raw_records: List[Dict[str, Any]]) -> tuple[List[Document600], List[Document200], int]:
+    @staticmethod
+    def build_client_data(call_record: FirestoreCallRecord, source: Optional[Dict[str, Any]]) -> Optional[ClientData]:
+        """
+        Datos del deudor tal como venían en el archivo del cliente. Si la fila de
+        origen no se encuentra (llamadas antiguas o sueltas), usa las variables
+        dinámicas de la llamada.
+        """
+        metadata = (source or {}).get('metadata_user') or {}
+        variables = call_record.dynamic_variables
+
+        rut = str(metadata.get('rut_deudor') or metadata.get('rut') or variables.get('rut_deudor') or '').strip()
+        if not rut:
+            return None
+
+        monto_digits = ''.join(ch for ch in str(metadata.get('deuda_cotizaciones') or '') if ch.isdigit())
+        return ClientData(
+            rut=rut,
+            nombre=str(metadata.get('nombre_deudor') or variables.get('name') or ''),
+            ciudad=str(metadata.get('ciudad') or ''),
+            telefono=format_phone_9_digits((source or {}).get('phone_number') or call_record.get_phone_number()),
+            monto_deuda=int(monto_digits) if monto_digits else call_record.get_amount_due(),
+            n_periodos=str(metadata.get('n_periodos') or ''),
+            menor_periodo=str(metadata.get('menor_per_deuda') or ''),
+            mayor_periodo=str(metadata.get('mayor_per_deuda') or ''),
+            tipo_cartera=str(metadata.get('tipo_cartera') or ''),
+        )
+
+    def process_and_classify_documents(
+        self,
+        raw_records: List[Dict[str, Any]],
+        source_records: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> tuple[List[Document600], List[Document200], int]:
         """
         Procesa registros y los clasifica para archivos 600 y 200.
         PP ahora genera AMBOS archivos (600 Y 200).
@@ -131,13 +174,14 @@ class Pipeline:
         doc_600_list = []
         doc_200_list = []
         errors = 0
-        
+        source_records = source_records or {}
+
         for record in raw_records:
             try:
                 call_record = FirestoreCallRecord(**record)
-                rut = call_record.get_rut()
-                
-                if not rut:
+                cliente = self.build_client_data(call_record, source_records.get(call_record.get_track_id()))
+
+                if not cliente:
                     logger.warning(f"Registro sin RUT válido: {call_record.conversation_id}")
                     errors += 1
                     continue
@@ -154,30 +198,30 @@ class Pipeline:
                 if final_outcome == "PP":
                     # 1. Crear documento 600 (Promesa de Pago)
                     due_date = call_record.get_due_date()
-                    amount_due = call_record.get_amount_due()
-                    
-                    if due_date and amount_due:
+
+                    if due_date and cliente.monto_deuda:
                         doc_600 = Document600(
-                            rut=rut,
+                            cliente=cliente,
                             agent_id=call_record.get_agent_name(),
                             processed_at=call_record.get_processed_datetime(),
                             due_date=due_date,
-                            amount_due=amount_due
+                            conversation_id=call_record.conversation_id,
                         )
                         doc_600_list.append(doc_600)
                         logger.debug(f"Documento 600 creado para: {call_record.conversation_id}")
                     else:
                         logger.warning(f"Promesa de pago sin datos completos: {call_record.conversation_id}")
                         errors += 1
-                
+
                 # TODOS los outcomes (incluyendo PP) generan documento 200
                 doc_200 = Document200(
-                    rut=rut,
+                    cliente=cliente,
                     processed_at=call_record.get_processed_datetime(),
                     codigo_resultado=final_outcome,
                     agent_name=call_record.get_agent_name(),
-                    phone_number=call_record.get_phone_number(),
+                    conversation_id=call_record.conversation_id,
                     call_duration=call_record.call_duration_secs,
+                    due_date=call_record.get_due_date(),
                     agendar_llamada=call_record.get_agendar_llamada()
                 )
                 doc_200_list.append(doc_200)

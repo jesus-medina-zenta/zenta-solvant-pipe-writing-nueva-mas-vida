@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from google.cloud import firestore
 from src.models.data_models import DataRecord
 from src.utils.logger import get_logger
@@ -44,6 +44,28 @@ class FirestoreService:
             logger.error("Error conectando a Firestore: %s", e, exc_info=True)
             self.is_connected = False
             return False
+
+    def get_source_records(self, track_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Busca las filas originales del archivo del cliente (registros_sftp) por
+        track_id. Devuelve {track_id: documento}. Firestore acepta hasta 30
+        valores por consulta 'in', así que se consulta por bloques.
+        """
+        unique_ids = [t for t in dict.fromkeys(track_ids) if t]
+        records: Dict[str, Dict[str, Any]] = {}
+        if not unique_ids:
+            return records
+
+        collection_ref = self.client.collection(self.firestore_config.source_collection)
+        for start in range(0, len(unique_ids), 30):
+            chunk = unique_ids[start:start + 30]
+            for doc in collection_ref.where("track_id", "in", chunk).stream():
+                data = doc.to_dict() or {}
+                if data.get("track_id"):
+                    records[data["track_id"]] = data
+
+        logger.info(f"{len(records)}/{len(unique_ids)} registros de origen encontrados en '{self.firestore_config.source_collection}'")
+        return records
 
     def disconnect(self) -> None:
         if self.client:

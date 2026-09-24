@@ -44,6 +44,7 @@ class FirestoreConfig(BaseSettings):
     collection: str
     database: str = "" 
     agent_id: str = Field(default="default_agent", description="ID del agente asociado a los registros")
+    source_collection: str = Field(default="registros_sftp", description="Colección con las filas originales del archivo del cliente")
 
     model_config = {
         "env_prefix": "FIRESTORE_",
