@@ -14,3 +14,4 @@ asyncio
 pathlib
 typing-extensions
 pytz
+requests>=2.31.0

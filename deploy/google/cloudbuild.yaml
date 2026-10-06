@@ -71,8 +71,7 @@ steps:
       - '--set-env-vars=FIRESTORE_AGENT_ID=${_FIRESTORE_AGENT_ID}'
       - '--set-env-vars=SFTP_HOST=${_SFTP_HOST}'
       - '--set-env-vars=SFTP_PORT=${_SFTP_PORT}'
-      - '--set-env-vars=SFTP_USERNAME=${_SFTP_USERNAME}'
-      - '--set-env-vars=SFTP_PASSWORD=${_SFTP_PASSWORD}'
+      - '--set-secrets=SFTP_USERNAME=sftp-username:latest,SFTP_PASSWORD=sftp-password:latest'
       - '--set-env-vars=EXPORT_SFTP_TXT_PATH=${_EXPORT_SFTP_TXT_PATH}'
 
 

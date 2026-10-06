@@ -162,11 +162,11 @@ class Document600(BaseModel):
     cliente: ClientData
     agent_id: str
     processed_at: datetime
-    due_date: str
+    due_date: Optional[str] = None
     conversation_id: str
 
     def to_row(self) -> Dict[str, Any]:
-        """Construye una fila del Excel de Promesas de Pago (PP)."""
+        """Construye una fila del Excel de Promesas de Pago (PP). La fecha de compromiso puede venir vacía."""
         return {
             "RUT Deudor": self.cliente.rut,
             "Nombre Deudor": self.cliente.nombre,
@@ -174,7 +174,7 @@ class Document600(BaseModel):
             "Monto Deuda ($)": self.cliente.monto_deuda,
             "Mayor Período de Deuda": self.cliente.mayor_periodo,
             "Fecha Gestión": _fecha_chile(self.processed_at),
-            "Fecha Compromiso Pago": self.due_date,
+            "Fecha Compromiso Pago": self.due_date or "",
             "Agente": self.agent_id,
             "ID Conversación": self.conversation_id,
         }

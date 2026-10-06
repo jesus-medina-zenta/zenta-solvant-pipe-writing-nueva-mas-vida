@@ -4,7 +4,7 @@ Lógica principal del pipeline ETL.
 import asyncio
 import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 #models
@@ -28,6 +28,12 @@ from .config import (
     init_config
 )
 from .models.data_models import DataRecord
+from .utils.day_report import (
+    build_pp_rows,
+    build_todos_rows,
+    chile_day_bounds_utc,
+    chile_today,
+)
 from .utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -49,72 +55,61 @@ class Pipeline:
         self.export_config = get_file_export_config()
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
-        # Si viene, el reporte se arma solo con esa carga (ej. "24092026-f5231027-...")
-        self.report_carga_id = os.getenv("REPORT_CARGA_ID", "").strip()
+        # Opcional (AAAA-MM-DD): reconstruye el reporte de otro día. Por defecto, hoy en horario de Chile.
+        self.report_date = os.getenv("REPORT_DATE", "").strip()
 
     async def run(self) -> bool:
         """
-        Ejecuta el pipeline completo.
-        
+        Genera el reporte consolidado del día: todas las cargas de hoy (la primera
+        y el re-llamado) y todas sus llamadas, en un solo TODOS y un solo PP con
+        nombre fijo, de modo que cada ejecución reemplaza al archivo anterior.
+
         Returns:
             bool: True si el pipeline fue exitoso, False en caso contrario
         """
         self.start_time = datetime.now(timezone.utc)
         logger.info("Iniciando ejecución del pipeline")
-        
+
         try:
-            if self.report_carga_id:
-                # Reporte de una sola carga: todas sus personas, contestaran o no
-                logger.info(f"Reporte por carga: {self.report_carga_id}")
-                if not self.firestore_service.connect():
-                    logger.error("No se pudo conectar a Firestore")
-                    return False
-                source_records = await asyncio.to_thread(
-                    self.firestore_service.get_source_records_by_carga, self.report_carga_id)
-                if not source_records:
-                    logger.warning(f"La carga {self.report_carga_id} no tiene registros")
-                    return True
-                firestore_data = await asyncio.to_thread(
-                    self.firestore_service.get_calls_by_track_ids, list(source_records))
-            else:
-                # Paso 1: Extract
-                logger.info("Iniciando extracción de Firestore")
-                firestore_data = await self.extract_from_firestore()
-                logger.debug(f"Datos extraídos: {len(firestore_data) if firestore_data else 0} registros")
-                if not firestore_data:
-                    logger.warning("No se encontraron datos en Firestore")
-                    return True
+            day = date.fromisoformat(self.report_date) if self.report_date else chile_today()
+            logger.info(f"Reporte consolidado del día {day.isoformat()}")
 
-                # Paso 2: Filas originales del archivo del cliente, para cruzar el reporte con su base
-                source_records = await asyncio.to_thread(
-                    self.firestore_service.get_source_records,
-                    [(r.get('dynamic_variables') or {}).get('track_id') for r in firestore_data],
-                )
+            if not self.firestore_service.connect():
+                logger.error("No se pudo conectar a Firestore")
+                return False
 
-            # Paso 3: Transform
+            start_utc, end_utc = chile_day_bounds_utc(day)
+            source_records = await asyncio.to_thread(
+                self.firestore_service.get_source_records_by_day, start_utc, end_utc)
+            if not source_records:
+                logger.warning(f"No hay cargas el {day.isoformat()}; no se genera reporte")
+                return True
+            firestore_data = await asyncio.to_thread(
+                self.firestore_service.get_calls_by_track_ids, list(source_records))
+
             logger.info("Procesando y clasificando documentos...")
             doc_600_list, doc_200_list, errors = self.process_and_classify_documents(firestore_data, source_records)
-            if self.report_carga_id:
-                doc_200_list += self.build_not_contacted_rows(firestore_data, source_records)
+            # ElevenLabs no avisa de las llamadas que no se contestan: quedan como NC
+            doc_200_list += self.build_not_contacted_rows(firestore_data, source_records)
 
             success = True
-            if doc_600_list:
-                logger.info(f"Generando Excel PP con {len(doc_600_list)} registros...")
-                success_pp = await self.generate_excel_pp(doc_600_list)
-                success = success and success_pp
+            pp_rows = build_pp_rows(doc_600_list)
+            if pp_rows:
+                logger.info(f"Generando Excel PP con {len(pp_rows)} registros...")
+                success = await self.generate_excel_pp(pp_rows, day) and success
 
-            if doc_200_list:
-                logger.info(f"Generando Excel de todos los resultados con {len(doc_200_list)} registros...")
-                success_todos = await self.generate_excel_todos(doc_200_list)
-                success = success and success_todos
-            
+            todos_rows = build_todos_rows(doc_200_list)
+            if todos_rows:
+                logger.info(f"Generando Excel de todos los resultados con {len(todos_rows)} registros...")
+                success = await self.generate_excel_todos(todos_rows, day) and success
+
             if success:
                 logger.info("Pipeline completado exitosamente")
             else:
                 logger.error("Pipeline completado con errores")
-            
+
             return success
-                
+
         except Exception as e:
             logger.exception(f"Error en el pipeline: {e}")
             return False
@@ -122,45 +117,14 @@ class Pipeline:
             self.end_time = datetime.now(timezone.utc)
             duration = (self.end_time - self.start_time).total_seconds()
             logger.info(f"Pipeline finalizado. Duración: {duration:.2f} segundos")
-    
-    async def extract_from_firestore(self) -> List[Dict[str, Any]]:
-        """
-        Extrae registros de llamadas desde Firestore.
-        SIEMPRE aplica filtros por:
-        - Fecha del día actual
-        - Agente específico configurado
-        """
-        try:
-            # Validar que tenemos el agent_id
-            if not self.firestore_config.agent_id:
-                raise ValueError("FIRESTORE_AGENT_ID debe estar configurado")
-            
-            # Conectar al servicio
-            if not self.firestore_service.connect():
-                logger.error("No se pudo conectar a Firestore")
-                return []
-            
-            # Extraer con filtros automáticos (día actual + agente)
-            documents = await asyncio.to_thread(
-                self.firestore_service.extract, 
-                get_firestore_config().collection
-            )
-            
-            logger.info(f"Extracción completada: {len(documents)} registros del día actual para agente {self.firestore_config.agent_id}")
-            
-            return documents
-            
-        except Exception as e:
-            logger.error(f"Error en extracción de Firestore: {e}")
-            return []
-    
+
     def build_not_contacted_rows(
         self,
         calls: List[Dict[str, Any]],
         source_records: Dict[str, Dict[str, Any]],
     ) -> List[Document200]:
         """
-        Filas NC para las personas de la carga sin llamada registrada: ElevenLabs
+        Filas NC para las personas cargadas sin llamada registrada: ElevenLabs
         no avisa de las llamadas que no se contestan, así que no quedan en
         registros_llamadas.
         """
@@ -172,11 +136,16 @@ class Pipeline:
             cliente = self.build_client_data(None, source)
             if not cliente:
                 continue
-            processed = str(source.get('processed_at') or source.get('fecha') or '')
-            try:
-                processed_at = datetime.fromisoformat(processed.replace('Z', '+00:00'))
-            except ValueError:
-                processed_at = datetime.now(timezone.utc)
+            processed = source.get('processed_at') or source.get('fecha') or ''
+            if isinstance(processed, datetime):
+                processed_at = processed
+            else:
+                try:
+                    processed_at = datetime.fromisoformat(str(processed).replace('Z', '+00:00'))
+                except ValueError:
+                    processed_at = datetime.now(timezone.utc)
+            if processed_at.tzinfo is None:
+                processed_at = processed_at.replace(tzinfo=timezone.utc)
             rows.append(Document200(
                 cliente=cliente,
                 processed_at=processed_at,
@@ -249,22 +218,17 @@ class Pipeline:
                 
                 # PP genera AMBOS archivos
                 if final_outcome == "PP":
-                    # 1. Crear documento 600 (Promesa de Pago)
-                    due_date = call_record.get_due_date()
-
-                    if due_date and cliente.monto_deuda:
-                        doc_600 = Document600(
-                            cliente=cliente,
-                            agent_id=call_record.get_agent_name(),
-                            processed_at=call_record.get_processed_datetime(),
-                            due_date=due_date,
-                            conversation_id=call_record.conversation_id,
-                        )
-                        doc_600_list.append(doc_600)
-                        logger.debug(f"Documento 600 creado para: {call_record.conversation_id}")
-                    else:
-                        logger.warning(f"Promesa de pago sin datos completos: {call_record.conversation_id}")
-                        errors += 1
+                    # 1. Crear documento 600 (Promesa de Pago). Va al archivo PP aunque
+                    #    el deudor no haya dicho una fecha de compromiso.
+                    doc_600 = Document600(
+                        cliente=cliente,
+                        agent_id=call_record.get_agent_name(),
+                        processed_at=call_record.get_processed_datetime(),
+                        due_date=call_record.get_due_date(),
+                        conversation_id=call_record.conversation_id,
+                    )
+                    doc_600_list.append(doc_600)
+                    logger.debug(f"Documento 600 creado para: {call_record.conversation_id}")
 
                 # TODOS los outcomes (incluyendo PP) generan documento 200
                 doc_200 = Document200(
@@ -287,37 +251,29 @@ class Pipeline:
         logger.info(f"Procesamiento completado: {len(doc_600_list)} archivo 600, {len(doc_200_list)} archivo 200, {errors} errores")
         return doc_600_list, doc_200_list, errors
     
-    async def generate_excel_pp(self, documents: List[Document600]) -> bool:
+    async def generate_excel_pp(self, rows: List[Dict[str, Any]], day: date) -> bool:
         """
-        Genera el Excel de Promesas de Pago (PP) y lo sube a SFTP en una
-        subcarpeta con la fecha del día (igual que los audios).
+        Sube el Excel de Promesas de Pago (PP) del día al SFTP, en la subcarpeta
+        con la fecha del día (igual que los audios).
         """
-        return await self._generate_and_upload_excel(
-            rows=[doc.to_row() for doc in documents],
-            filename_suffix="PP",
-        )
+        return await self._generate_and_upload_excel(rows, "PP", day)
 
-    async def generate_excel_todos(self, documents: List[Document200]) -> bool:
+    async def generate_excel_todos(self, rows: List[Dict[str, Any]], day: date) -> bool:
         """
-        Genera el Excel con todos los resultados de gestión y lo sube a SFTP
-        en una subcarpeta con la fecha del día (igual que los audios).
+        Sube el Excel con todos los intentos del día al SFTP, en la subcarpeta
+        con la fecha del día (igual que los audios).
         """
-        return await self._generate_and_upload_excel(
-            rows=[doc.to_row() for doc in documents],
-            filename_suffix="TODOS",
-        )
+        return await self._generate_and_upload_excel(rows, "TODOS", day)
 
-    async def _generate_and_upload_excel(self, rows: List[Dict[str, Any]], filename_suffix: str) -> bool:
+    async def _generate_and_upload_excel(self, rows: List[Dict[str, Any]], filename_suffix: str, day: date) -> bool:
         """
-        Genera un Excel a partir de filas ya construidas y lo sube al SFTP
-        dentro de una subcarpeta con la fecha del día (ddmmyyyy).
+        Genera un Excel con nombre fijo AAAAMMDD_<sufijo>.xlsx y lo sube al SFTP
+        dentro de la subcarpeta ddmmyyyy del día. Como el nombre no cambia, cada
+        ejecución reemplaza el archivo anterior.
         """
+        filename = f"{day:%Y%m%d}_{filename_suffix}.xlsx"
         try:
             await self.file_service.connect()
-            timestamp = datetime.now().strftime("%Y%m%d")
-            # En modo carga se agrega el inicio del id de la carga para no pisar el reporte del día
-            carga_tag = f"_lote-{self.report_carga_id.split('-')[1]}" if '-' in self.report_carga_id else ""
-            filename = f"{timestamp}{carga_tag}_{filename_suffix}.xlsx"
 
             success_write = await self.file_service.load(rows, filename, file_type="xlsx")
             if not success_write:
@@ -326,10 +282,8 @@ class Pipeline:
 
             logger.info(f"Excel generado: {filename} con {len(rows)} filas")
 
-            # Subir al SFTP en una subcarpeta con la fecha del día (ddmmyyyy)
             temp_path = self.file_service.base_path / filename
-            date_folder = datetime.now().strftime("%d%m%Y")
-            remote_path = f"{self.export_config.sftp_txt_path}/{date_folder}/{filename}"
+            remote_path = f"{self.export_config.sftp_txt_path}/{day:%d%m%Y}/{filename}"
             success = await self._upload_to_sftp(str(temp_path), remote_path)
 
             # Limpiar archivo temporal

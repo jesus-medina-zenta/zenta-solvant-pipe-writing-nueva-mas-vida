@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from src.models.data_models import DataRecord
 from src.utils.logger import get_logger
 from src.config import get_firestore_config
@@ -67,21 +69,53 @@ class FirestoreService:
         logger.info(f"{len(records)}/{len(unique_ids)} registros de origen encontrados en '{self.firestore_config.source_collection}'")
         return records
 
-    def get_source_records_by_carga(self, carga_id: str) -> Dict[str, Dict[str, Any]]:
+    def get_source_records_by_day(self, start_utc: datetime, end_utc: datetime) -> Dict[str, Dict[str, Any]]:
         """
-        Filas de una carga del archivo del cliente (registros_sftp). Devuelve {track_id: documento}.
+        Filas de todas las cargas del día (registros_sftp, por processed_at entre
+        start_utc incluido y end_utc excluido). Devuelve {track_id: documento}.
         """
         collection_ref = self.client.collection(self.firestore_config.source_collection)
-        # En registros_sftp el campo "id" guarda el UUID de la carga, sin la fecha adelante
-        carga_uuid = carga_id.split("-", 1)[1] if carga_id[:8].isdigit() and carga_id[8:9] == "-" else carga_id
-        query = collection_ref.where("id", "==", carga_uuid)
+        query = (
+            collection_ref
+            .where(filter=FieldFilter("processed_at", ">=", start_utc))
+            .where(filter=FieldFilter("processed_at", "<", end_utc))
+        )
         records = {}
         for doc in query.stream():
             data = doc.to_dict() or {}
             if data.get("track_id"):
                 records[data["track_id"]] = data
-        logger.info(f"{len(records)} registros de la carga {carga_id} en '{self.firestore_config.source_collection}'")
+        logger.info(f"{len(records)} registros de las cargas del {start_utc.isoformat()} al {end_utc.isoformat()} en '{self.firestore_config.source_collection}'")
         return records
+
+    def save_source_records(self, records: Dict[str, Dict[str, Any]]) -> int:
+        """
+        Guarda filas nuevas en registros_sftp. Recibe {id_documento: datos}. Los
+        documentos se crean (no se pisan): si el id ya existe, falla.
+        """
+        collection_ref = self.client.collection(self.firestore_config.source_collection)
+        items = list(records.items())
+        for start in range(0, len(items), 500):
+            batch = self.client.batch()
+            for doc_id, data in items[start:start + 500]:
+                batch.create(collection_ref.document(doc_id), data)
+            batch.commit()
+        logger.info(f"{len(items)} registros creados en '{self.firestore_config.source_collection}'")
+        return len(items)
+
+    def claim_recall(self, collection: str, key: str, data: Dict[str, Any]) -> bool:
+        """
+        Reserva el re-llamado de un día creando su documento. Devuelve False si ya
+        existía, para que el re-llamado se haga una sola vez por día.
+        """
+        try:
+            self.client.collection(collection).document(key).create(data)
+            return True
+        except AlreadyExists:
+            return False
+
+    def update_recall(self, collection: str, key: str, data: Dict[str, Any]) -> None:
+        self.client.collection(collection).document(key).update(data)
 
     def get_calls_by_track_ids(self, track_ids: List[str]) -> List[Dict[str, Any]]:
         """Llamadas registradas (registros_llamadas) de los track_id indicados, sin filtro de fecha."""
